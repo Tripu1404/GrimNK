@@ -17,7 +17,6 @@ import java.util.UUID;
 
 public class InventoryMoveCheck implements Listener {
 
-    // Clase interna para guardar el tick y saber qué tipo de inventario es
     private static class InvData {
         int tick;
         boolean isLocal;
@@ -33,10 +32,7 @@ public class InventoryMoveCheck implements Listener {
     @EventHandler
     public void onInventoryOpen(InventoryOpenEvent event) {
         InventoryType type = event.getInventory().getType();
-        
-        // Verificamos si es el inventario propio del jugador (UI, CRAFTING, o PLAYER)
         boolean isLocal = (type == InventoryType.UI || type == InventoryType.CRAFTING || type == InventoryType.PLAYER);
-        
         openInventories.put(event.getPlayer().getUniqueId(), new InvData(Server.getInstance().getTick(), isLocal));
     }
 
@@ -75,26 +71,28 @@ public class InventoryMoveCheck implements Listener {
                 isViolating = true;
             }
 
-            // 2. COMPROBACIÓN VERTICAL
+            // 2. COMPROBACIÓN VERTICAL (Solo Máximos)
             if (!isViolating) {
                 if (dY > 0) { 
+                    // MOVIMIENTO HACIA ARRIBA
                     if (player.hasEffect(Effect.LEVITATION)) {
-                        if (dY > 0.2 || dY < 0.15) {
+                        if (dY > 0.2) { // Sin mínimo
                             isViolating = true;
                         }
                     } else {
-                        if (dY > 0.5) {
+                        if (dY > 0.5) { // Sin mínimo
                             isViolating = true;
                         }
                     }
                 } else if (dY < 0) { 
+                    // MOVIMIENTO HACIA ABAJO (Caída)
                     double fallSpeed = Math.abs(dY); 
                     if (player.hasEffect(Effect.SLOW_FALLING)) {
-                        if (fallSpeed > 0.55 || fallSpeed < 0.45) {
+                        if (fallSpeed > 0.55) { // Sin mínimo
                             isViolating = true;
                         }
                     } else {
-                        if (fallSpeed > 1.10) {
+                        if (fallSpeed > 2.0) { // Sin mínimo
                             isViolating = true;
                         }
                     }
@@ -105,13 +103,10 @@ public class InventoryMoveCheck implements Listener {
             if (isViolating) {
                 event.setCancelled(true);
                 
-                // Si NO es el inventario local (es decir, es un cofre), aplicamos la limpieza para evitar desync
                 if (!data.isLocal) {
                     player.removeAllWindows();
                     openInventories.remove(uuid);
                 }
-                // Si ES el inventario local, no hacemos nada más. El evento se cancela
-                // y en el próximo tick volverá a entrar a esta comprobación hasta que lo cierre.
             }
         }
     }
