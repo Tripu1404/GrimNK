@@ -1,0 +1,49 @@
+name: Compilar AntiCheat (Sin Maven)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout del código
+      uses: actions/checkout@v4
+
+    - name: Configurar Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17' # Versión recomendada para las versiones recientes de Nukkit
+
+    - name: Descargar Nukkit
+      run: |
+        # Descarga el último build compilado de NukkitX desde su repositorio oficial
+        wget https://github.com/PetteriM1/NukkitPetteriM1Edition/releases/download/4350/Nukkit-PM1E.jar -O nukkit.jar
+
+    - name: Compilar el código Java
+      run: |
+        mkdir -p out
+        # Encuentra todos los archivos .java en tu carpeta src y los compila usando el nukkit.jar descargado
+        find src/main/java -name "*.java" > sources.txt
+        javac -cp nukkit.jar -d out @sources.txt
+
+    - name: Copiar archivos de recursos
+      run: |
+        # Copia plugin.yml y config.yml a la carpeta de salida
+        cp -r src/main/resources/* out/
+
+    - name: Crear el archivo .jar del Plugin
+      run: |
+        # Empaqueta todo el contenido de la carpeta 'out' en AntiCheat.jar
+        jar cf AntiCheat.jar -C out/ .
+
+    - name: Subir el Plugin listo para usar
+      uses: actions/upload-artifact@v4
+      with:
+        name: AntiCheat-Plugin
+        path: AntiCheat.jar
