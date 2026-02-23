@@ -9,9 +9,11 @@ import cn.nukkit.event.block.BlockPlaceEvent;
 import cn.nukkit.event.entity.EntityDamageByEntityEvent;
 import cn.nukkit.event.entity.EntityDamageEvent;
 import cn.nukkit.event.player.PlayerMoveEvent;
+import cn.nukkit.event.player.PlayerQuitEvent;
 import cn.nukkit.event.player.PlayerToggleFlightEvent;
 import cn.nukkit.event.player.PlayerToggleGlideEvent;
 import cn.nukkit.math.AxisAlignedBB;
+import cn.nukkit.math.Vector3;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -20,9 +22,15 @@ import java.util.UUID;
 public class FlightCheck implements Listener {
 
     private final Map<UUID, Integer> airTicks = new HashMap<>();
-    
-    // Nuevo: Registro del momento exacto de la última infracción en milisegundos
     private final Map<UUID, Long> lastViolation = new HashMap<>();
+
+    // --- LIMPIEZA DE MEMORIA ---
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        airTicks.remove(uuid);
+        lastViolation.remove(uuid);
+    }
 
     @EventHandler
     public void onToggleGlide(PlayerToggleGlideEvent event) {
@@ -53,7 +61,6 @@ public class FlightCheck implements Listener {
 
         double dY = event.getTo().getY() - event.getFrom().getY();
 
-        // 1. Verificación matemática de suelo
         boolean trulyOnGround = checkGroundState(player);
 
         if (trulyOnGround) {
@@ -71,7 +78,6 @@ public class FlightCheck implements Listener {
             }
         }
 
-        // 2. Fallback de seguridad
         if (player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding()) {
             event.setCancelled(true);
             cancelFly(player);
@@ -89,15 +95,10 @@ public class FlightCheck implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onEntityDamage(EntityDamageEvent event) {
-        // Verificamos si el daño fue causado por una entidad a otra
         if (event instanceof EntityDamageByEntityEvent) {
             EntityDamageByEntityEvent damageEvent = (EntityDamageByEntityEvent) event;
-            
-            // Verificamos si el atacante es un jugador
             if (damageEvent.getDamager() instanceof Player) {
                 Player damager = (Player) damageEvent.getDamager();
-                
-                // Si el atacante está en tiempo de penalización por volar, cancelamos el golpe
                 if (isViolating(damager)) {
                     event.setCancelled(true);
                 }
@@ -107,11 +108,7 @@ public class FlightCheck implements Listener {
 
     // --- MÉTODOS INTERNOS ---
 
-    /**
-     * Aplica los castigos y registra el tiempo de la infracción
-     */
     private void cancelFly(Player player) {
-        // Guardamos el momento exacto en el que detectamos el hack
         lastViolation.put(player.getUniqueId(), System.currentTimeMillis());
         
         player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
@@ -119,20 +116,15 @@ public class FlightCheck implements Listener {
         player.getAdventureSettings().update();
         player.setGliding(false);
         
-        player.setMotion(player.getTemporalVector().setComponents(0.0, -5.0, 0.0));
+        // CORRECCIÓN: Usamos un nuevo Vector3 en lugar de getTemporalVector()
+        player.setMotion(new Vector3(0.0, -5.0, 0.0));
     }
 
-    /**
-     * Verifica si han pasado menos de 1.5 segundos desde la última detección de hack
-     */
     private boolean isViolating(Player player) {
         long lastTime = lastViolation.getOrDefault(player.getUniqueId(), 0L);
         return (System.currentTimeMillis() - lastTime) < 1500;
     }
 
-    /**
-     * Revisa físicamente si hay bloques sólidos debajo de la caja de colisión.
-     */
     private boolean checkGroundState(Player player) {
         AxisAlignedBB bb = player.getBoundingBox().clone();
         bb.setMinY(bb.getMinY() - 0.6);
