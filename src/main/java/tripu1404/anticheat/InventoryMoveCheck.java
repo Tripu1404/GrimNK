@@ -76,7 +76,7 @@ public class InventoryMoveCheck implements Listener {
                 if (dY > 0) { 
                     // MOVIMIENTO HACIA ARRIBA
                     if (player.hasEffect(Effect.LEVITATION)) {
-                        if (dY > 0.2) { // Sin mínimo
+                        if (dY > 0.25) { // Sin mínimo
                             isViolating = true;
                         }
                     } else {
