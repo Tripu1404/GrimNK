@@ -1,0 +1,5 @@
+name: AntiCheat
+main: tripu1404.anticheat.Main
+version: "1.0.0"
+api: ["1.0.0"]
+author: tripu1404
