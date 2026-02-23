@@ -1,25 +1,43 @@
 package tripu1404.anticheat.checks;
 
 import cn.nukkit.Player;
+import cn.nukkit.Server;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.inventory.InventoryCloseEvent;
 import cn.nukkit.event.inventory.InventoryOpenEvent;
 import cn.nukkit.event.player.PlayerMoveEvent;
 import cn.nukkit.event.player.PlayerQuitEvent;
+import cn.nukkit.inventory.InventoryType;
 import cn.nukkit.potion.Effect;
 
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 public class InventoryMoveCheck implements Listener {
 
-    private final Set<UUID> openInventories = new HashSet<>();
+    // Clase interna para guardar el tick y saber qué tipo de inventario es
+    private static class InvData {
+        int tick;
+        boolean isLocal;
+
+        InvData(int tick, boolean isLocal) {
+            this.tick = tick;
+            this.isLocal = isLocal;
+        }
+    }
+
+    private final Map<UUID, InvData> openInventories = new HashMap<>();
 
     @EventHandler
     public void onInventoryOpen(InventoryOpenEvent event) {
-        openInventories.add(event.getPlayer().getUniqueId());
+        InventoryType type = event.getInventory().getType();
+        
+        // Verificamos si es el inventario propio del jugador (UI, CRAFTING, o PLAYER)
+        boolean isLocal = (type == InventoryType.UI || type == InventoryType.CRAFTING || type == InventoryType.PLAYER);
+        
+        openInventories.put(event.getPlayer().getUniqueId(), new InvData(Server.getInstance().getTick(), isLocal));
     }
 
     @EventHandler
@@ -37,63 +55,63 @@ public class InventoryMoveCheck implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         
-        if (!openInventories.contains(uuid)) {
+        if (!openInventories.containsKey(uuid)) {
             return;
         }
 
-        double dX = event.getTo().getX() - event.getFrom().getX();
-        double dY = event.getTo().getY() - event.getFrom().getY();
-        double dZ = event.getTo().getZ() - event.getFrom().getZ();
+        InvData data = openInventories.get(uuid);
+        int currentTick = Server.getInstance().getTick();
 
-        // 1. COMPROBACIÓN HORIZONTAL (Inventory Move)
-        double horizontalDistance = (dX * dX) + (dZ * dZ);
-        if (horizontalDistance > 0.0001) {
-            event.setCancelled(true);
-            
-            // FIX DEL DESYNC: Forzamos el cierre del inventario en el servidor 
-            // y sacamos al jugador de la lista para que no se quede congelado.
-            player.removeAllWindows();
-            openInventories.remove(uuid);
-            return; 
-        }
+        if (currentTick - data.tick > 5) {
+            double dX = event.getTo().getX() - event.getFrom().getX();
+            double dY = event.getTo().getY() - event.getFrom().getY();
+            double dZ = event.getTo().getZ() - event.getFrom().getZ();
 
-        // 2. COMPROBACIÓN VERTICAL ESTRICTA
-        if (dY > 0) { 
-            // MOVIMIENTO HACIA ARRIBA
-            if (player.hasEffect(Effect.LEVITATION)) {
-                // Levitación: Máximo 0.2, Mínimo 0.15
-                if (dY > 0.2 || dY < 0.15) {
-                    event.setCancelled(true);
-                    player.removeAllWindows();
-                    openInventories.remove(uuid);
-                }
-            } else {
-                // Salto normal sin efectos
-                if (dY > 0.5) {
-                    event.setCancelled(true);
-                    player.removeAllWindows();
-                    openInventories.remove(uuid);
+            boolean isViolating = false;
+
+            // 1. COMPROBACIÓN HORIZONTAL
+            double horizontalDistance = (dX * dX) + (dZ * dZ);
+            if (horizontalDistance > 0.0001) {
+                isViolating = true;
+            }
+
+            // 2. COMPROBACIÓN VERTICAL
+            if (!isViolating) {
+                if (dY > 0) { 
+                    if (player.hasEffect(Effect.LEVITATION)) {
+                        if (dY > 0.2 || dY < 0.15) {
+                            isViolating = true;
+                        }
+                    } else {
+                        if (dY > 0.5) {
+                            isViolating = true;
+                        }
+                    }
+                } else if (dY < 0) { 
+                    double fallSpeed = Math.abs(dY); 
+                    if (player.hasEffect(Effect.SLOW_FALLING)) {
+                        if (fallSpeed > 0.55 || fallSpeed < 0.45) {
+                            isViolating = true;
+                        }
+                    } else {
+                        if (fallSpeed > 1.10) {
+                            isViolating = true;
+                        }
+                    }
                 }
             }
-            
-        } else if (dY < 0) { 
-            // MOVIMIENTO HACIA ABAJO (Caída)
-            double fallSpeed = Math.abs(dY); 
 
-            if (player.hasEffect(Effect.SLOW_FALLING)) {
-                // Caída Lenta: Máximo 0.55, Mínimo 0.45
-                if (fallSpeed > 0.55 || fallSpeed < 0.45) {
-                    event.setCancelled(true);
+            // Castigo
+            if (isViolating) {
+                event.setCancelled(true);
+                
+                // Si NO es el inventario local (es decir, es un cofre), aplicamos la limpieza para evitar desync
+                if (!data.isLocal) {
                     player.removeAllWindows();
                     openInventories.remove(uuid);
                 }
-            } else {
-                // Caída Normal: Solo Máximo 1.10 (Sin mínimo)
-                if (fallSpeed > 1.10) {
-                    event.setCancelled(true);
-                    player.removeAllWindows();
-                    openInventories.remove(uuid);
-                }
+                // Si ES el inventario local, no hacemos nada más. El evento se cancela
+                // y en el próximo tick volverá a entrar a esta comprobación hasta que lo cierre.
             }
         }
     }
