@@ -35,8 +35,9 @@ public class InventoryMoveCheck implements Listener {
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
         
-        if (!openInventories.contains(player.getUniqueId())) {
+        if (!openInventories.contains(uuid)) {
             return;
         }
 
@@ -48,21 +49,30 @@ public class InventoryMoveCheck implements Listener {
         double horizontalDistance = (dX * dX) + (dZ * dZ);
         if (horizontalDistance > 0.0001) {
             event.setCancelled(true);
+            
+            // FIX DEL DESYNC: Forzamos el cierre del inventario en el servidor 
+            // y sacamos al jugador de la lista para que no se quede congelado.
+            player.removeAllWindows();
+            openInventories.remove(uuid);
             return; 
         }
 
-        // 2. COMPROBACIÓN VERTICAL ESTRICTA (Limites Min y Max)
+        // 2. COMPROBACIÓN VERTICAL ESTRICTA
         if (dY > 0) { 
             // MOVIMIENTO HACIA ARRIBA
             if (player.hasEffect(Effect.LEVITATION)) {
                 // Levitación: Máximo 0.2, Mínimo 0.15
                 if (dY > 0.2 || dY < 0.15) {
                     event.setCancelled(true);
+                    player.removeAllWindows();
+                    openInventories.remove(uuid);
                 }
             } else {
-                // Salto normal o subir losas sin efectos
+                // Salto normal sin efectos
                 if (dY > 0.5) {
                     event.setCancelled(true);
+                    player.removeAllWindows();
+                    openInventories.remove(uuid);
                 }
             }
             
@@ -74,11 +84,15 @@ public class InventoryMoveCheck implements Listener {
                 // Caída Lenta: Máximo 0.55, Mínimo 0.45
                 if (fallSpeed > 0.55 || fallSpeed < 0.45) {
                     event.setCancelled(true);
+                    player.removeAllWindows();
+                    openInventories.remove(uuid);
                 }
             } else {
-                // Caída Normal: Máximo 1.10, Mínimo 0.8
-                if (fallSpeed > 1.10 || fallSpeed < 0.8) {
+                // Caída Normal: Solo Máximo 1.10 (Sin mínimo)
+                if (fallSpeed > 1.10) {
                     event.setCancelled(true);
+                    player.removeAllWindows();
+                    openInventories.remove(uuid);
                 }
             }
         }
