@@ -1,6 +1,4 @@
-# Configuración de los Checks del AntiCheat
-# Cambia a 'false' para desactivar un módulo específico.
-
 checks:
   inventory-move: true
   no-slow-down: true
+  flight-block: true
