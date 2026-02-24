@@ -4,6 +4,7 @@ import cn.nukkit.AdventureSettings;
 import cn.nukkit.Player;
 import cn.nukkit.Server;
 import cn.nukkit.block.Block;
+import cn.nukkit.block.BlockID;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.block.BlockPlaceEvent;
@@ -56,36 +57,37 @@ public class FlightCheck implements Listener {
             return;
         }
 
+        // Comprobamos si está en agua, lava o escalando (Lógica de CheatPlayer.kt)
+        boolean isClimbing = isClimbing(player);
+        boolean isInLiquid = player.isInsideOfWater() || isInLava(player);
         boolean trulyOnGround = checkGroundState(player);
+        
         double dY = event.getTo().getY() - event.getFrom().getY();
 
-        if (trulyOnGround) {
+        if (trulyOnGround || isClimbing || isInLiquid) {
             airTicks.put(uuid, 0);
             lastGroundLoc.put(uuid, player.getLocation().clone());
         } else {
             int ticks = airTicks.getOrDefault(uuid, 0) + 1;
             airTicks.put(uuid, ticks);
 
-            // --- LÓGICA DE SALTO Y VUELO ---
             Location ground = lastGroundLoc.get(uuid);
             double heightFromGround = (ground != null) ? (event.getTo().getY() - ground.getY()) : 0;
 
-            if (dY > 0) { // El jugador está subiendo
-                // Un salto normal no debería durar más de 14 ticks subiendo
-                // Y no debería superar los 1.3 bloques de altura (salto + losa/escalera)
-                if (ticks > 14 || heightFromGround > 1.3) {
+            if (dY > 0) { 
+                // Aumentamos el margen a 16 ticks y 1.5 de altura para mayor compatibilidad
+                if (ticks > 16 || heightFromGround > 1.5) {
                     event.setCancelled(true);
                     processViolation(player);
                     return;
                 }
-            } else if (dY == 0) { // El jugador está suspendido en el aire (Hover/AirJump)
-                if (ticks > 10) {
+            } else if (dY == 0) {
+                if (ticks > 12) {
                     event.setCancelled(true);
                     processViolation(player);
                     return;
                 }
             } else {
-                // Si dY < 0 es una caída normal. Solo bloqueamos si es velocidad de Fly hacia abajo
                 if (Math.abs(dY) > 2.0) {
                     event.setCancelled(true);
                     processViolation(player);
@@ -93,7 +95,6 @@ public class FlightCheck implements Listener {
             }
         }
 
-        // Detección por paquetes internos del cliente
         if (player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding()) {
             event.setCancelled(true);
             processViolation(player);
@@ -116,7 +117,6 @@ public class FlightCheck implements Listener {
     }
 
     private void processViolation(Player player) {
-        // Desactivamos el vuelo en las configuraciones de aventura
         player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
         player.getAdventureSettings().set(AdventureSettings.Type.FLYING, false);
         player.getAdventureSettings().update();
@@ -127,7 +127,6 @@ public class FlightCheck implements Listener {
             Server.getInstance().getScheduler().scheduleDelayedTask(() -> {
                 if (player.isOnline()) {
                     player.teleport(backPos);
-                    // Aplicamos una moción hacia abajo para asegurar que toque el suelo
                     player.setMotion(new Vector3(0, -1, 0));
                 }
             }, 1);
@@ -137,18 +136,30 @@ public class FlightCheck implements Listener {
     private boolean isViolating(Player player) {
         if (player.isCreative() || player.isSpectator()) return false;
         int ticks = airTicks.getOrDefault(player.getUniqueId(), 0);
-        return (ticks > 14 || player.isGliding() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING));
+        return (ticks > 16 || player.isGliding() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING));
     }
 
     private boolean checkGroundState(Player player) {
         AxisAlignedBB bb = player.getBoundingBox().clone();
-        // Usamos una comprobación de suelo más profunda para evitar desincronización
         bb.setMinY(bb.getMinY() - 0.5); 
         bb.setMaxY(bb.getMinY() + 0.1);
-
         for (Block block : player.getLevel().getCollisionBlocks(bb)) {
             if (!block.canPassThrough()) return true;
         }
         return false;
+    }
+
+    private boolean isInLava(Player player) {
+        return player.getLevel().getBlock(player).getId() == BlockID.LAVA || 
+               player.getLevel().getBlock(player).getId() == BlockID.STILL_LAVA;
+    }
+
+    private boolean isClimbing(Player player) {
+        // Verifica si el bloque actual es escalable (Escaleras, Vines, Lianas)
+        Block block = player.getLevel().getBlock(player);
+        int id = block.getId();
+        return id == BlockID.LADDER || id == BlockID.VINE || 
+               id == BlockID.WEEPING_VINES || id == BlockID.TWISTING_VINES ||
+               id == BlockID.SCAFFOLDING;
     }
 }
