@@ -57,26 +57,37 @@ public class FlightCheck implements Listener {
         }
 
         boolean trulyOnGround = checkGroundState(player);
+        double dY = event.getTo().getY() - event.getFrom().getY();
 
         if (trulyOnGround) {
             airTicks.put(uuid, 0);
-            // Guardamos la posición exacta antes de que empiece cualquier movimiento de hack
             lastGroundLoc.put(uuid, player.getLocation().clone());
         } else {
             int ticks = airTicks.getOrDefault(uuid, 0) + 1;
             airTicks.put(uuid, ticks);
 
-            double dY = event.getTo().getY() - event.getFrom().getY();
-
-            // Detección inmediata: si sube o levita sin estar en el suelo
-            if (dY >= 0 && ticks > 5) { // 5 ticks es el margen para un salto normal
-                event.setCancelled(true);
-                processViolation(player);
-                return;
+            // --- LÓGICA DE DETECCIÓN MEJORADA ---
+            
+            // 1. Si está subiendo o flotando (dY >= 0)
+            if (dY >= 0) {
+                // Si lleva más de 5 ticks subiendo/flotando sin suelo, es Fly
+                if (ticks > 5) {
+                    event.setCancelled(true);
+                    processViolation(player);
+                    return;
+                }
+            } else {
+                // 2. Si está bajando (dY < 0), es una caída.
+                // Solo cancelamos si la velocidad de caída es humanamente imposible (> 2.0)
+                if (Math.abs(dY) > 2.0) {
+                    event.setCancelled(true);
+                    processViolation(player);
+                    return;
+                }
+                // Importante: No cancelamos el movimiento en caídas normales aunque ticks > 5
             }
         }
 
-        // Si el cliente reporta que está volando internamente
         if (player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding()) {
             event.setCancelled(true);
             processViolation(player);
@@ -99,7 +110,6 @@ public class FlightCheck implements Listener {
     }
 
     private void processViolation(Player player) {
-        // Quitamos permisos de inmediato
         player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
         player.getAdventureSettings().set(AdventureSettings.Type.FLYING, false);
         player.getAdventureSettings().update();
@@ -107,12 +117,10 @@ public class FlightCheck implements Listener {
 
         Location backPos = lastGroundLoc.get(player.getUniqueId());
         if (backPos != null) {
-            // El truco para el Rubberband efectivo en Nukkit:
-            // Teletransportar en el siguiente tick para sobrescribir el paquete del cliente.
             Server.getInstance().getScheduler().scheduleDelayedTask(() -> {
                 if (player.isOnline()) {
                     player.teleport(backPos);
-                    player.setMotion(new Vector3(0, -1, 0)); // Fuerza de caída leve para asegurar contacto
+                    player.setMotion(new Vector3(0, -0.5, 0)); 
                 }
             }, 1);
         }
@@ -120,14 +128,20 @@ public class FlightCheck implements Listener {
 
     private boolean isCurrentlyHacking(Player player) {
         if (player.isCreative() || player.isSpectator()) return false;
-        return player.getAdventureSettings().get(AdventureSettings.Type.FLYING) 
-                || player.isGliding() 
-                || airTicks.getOrDefault(player.getUniqueId(), 0) > 5;
+        
+        // Un jugador está "hackeando" si vuela internamente o si sube/flota sin suelo por mucho tiempo
+        boolean internalFly = player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding();
+        boolean airJump = airTicks.getOrDefault(player.getUniqueId(), 0) > 5;
+        
+        // Solo consideramos airJump si el jugador no está cayendo (Y vel < 0)
+        // Pero para simplificar en eventos de daño/bloques, si está en el aire > 5 y no tiene suelo:
+        return internalFly || airJump;
     }
 
     private boolean checkGroundState(Player player) {
         AxisAlignedBB bb = player.getBoundingBox().clone();
-        bb.setMinY(bb.getMinY() - 0.1); // Reducimos el margen para ser más estrictos
+        // Usamos la lógica de colisión estricta de tu código base
+        bb.setMinY(bb.getMinY() - 0.1); 
         bb.setMaxY(bb.getMinY() + 0.05);
 
         for (Block block : player.getLevel().getCollisionBlocks(bb)) {
