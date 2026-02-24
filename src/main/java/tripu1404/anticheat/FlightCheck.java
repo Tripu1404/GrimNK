@@ -52,7 +52,7 @@ public class FlightCheck implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
 
-        if (player.isCreative() || player.isSpectator() || player.getAdventureSettings().get(AdventureSettings.Type.ALLOW_FLIGHT)) {
+        if (player.isCreative() || player.isSpectator() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING)) {
             return;
         }
 
@@ -66,28 +66,34 @@ public class FlightCheck implements Listener {
             int ticks = airTicks.getOrDefault(uuid, 0) + 1;
             airTicks.put(uuid, ticks);
 
-            // --- LÓGICA DE DETECCIÓN MEJORADA ---
-            
-            // 1. Si está subiendo o flotando (dY >= 0)
-            if (dY >= 0) {
-                // Si lleva más de 5 ticks subiendo/flotando sin suelo, es Fly
-                if (ticks > 5) {
+            // --- LÓGICA DE SALTO Y VUELO ---
+            Location ground = lastGroundLoc.get(uuid);
+            double heightFromGround = (ground != null) ? (event.getTo().getY() - ground.getY()) : 0;
+
+            if (dY > 0) { // El jugador está subiendo
+                // Un salto normal no debería durar más de 14 ticks subiendo
+                // Y no debería superar los 1.3 bloques de altura (salto + losa/escalera)
+                if (ticks > 14 || heightFromGround > 1.3) {
+                    event.setCancelled(true);
+                    processViolation(player);
+                    return;
+                }
+            } else if (dY == 0) { // El jugador está suspendido en el aire (Hover/AirJump)
+                if (ticks > 10) {
                     event.setCancelled(true);
                     processViolation(player);
                     return;
                 }
             } else {
-                // 2. Si está bajando (dY < 0), es una caída.
-                // Solo cancelamos si la velocidad de caída es humanamente imposible (> 2.0)
+                // Si dY < 0 es una caída normal. Solo bloqueamos si es velocidad de Fly hacia abajo
                 if (Math.abs(dY) > 2.0) {
                     event.setCancelled(true);
                     processViolation(player);
-                    return;
                 }
-                // Importante: No cancelamos el movimiento en caídas normales aunque ticks > 5
             }
         }
 
+        // Detección por paquetes internos del cliente
         if (player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding()) {
             event.setCancelled(true);
             processViolation(player);
@@ -96,20 +102,21 @@ public class FlightCheck implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
-        if (isCurrentlyHacking(event.getPlayer())) event.setCancelled(true);
+        if (isViolating(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onEntityDamage(EntityDamageEvent event) {
         if (event instanceof EntityDamageByEntityEvent) {
             EntityDamageByEntityEvent ev = (EntityDamageByEntityEvent) event;
-            if (ev.getDamager() instanceof Player && isCurrentlyHacking((Player) ev.getDamager())) {
+            if (ev.getDamager() instanceof Player && isViolating((Player) ev.getDamager())) {
                 event.setCancelled(true);
             }
         }
     }
 
     private void processViolation(Player player) {
+        // Desactivamos el vuelo en las configuraciones de aventura
         player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
         player.getAdventureSettings().set(AdventureSettings.Type.FLYING, false);
         player.getAdventureSettings().update();
@@ -120,29 +127,24 @@ public class FlightCheck implements Listener {
             Server.getInstance().getScheduler().scheduleDelayedTask(() -> {
                 if (player.isOnline()) {
                     player.teleport(backPos);
-                    player.setMotion(new Vector3(0, -0.5, 0)); 
+                    // Aplicamos una moción hacia abajo para asegurar que toque el suelo
+                    player.setMotion(new Vector3(0, -1, 0));
                 }
             }, 1);
         }
     }
 
-    private boolean isCurrentlyHacking(Player player) {
+    private boolean isViolating(Player player) {
         if (player.isCreative() || player.isSpectator()) return false;
-        
-        // Un jugador está "hackeando" si vuela internamente o si sube/flota sin suelo por mucho tiempo
-        boolean internalFly = player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding();
-        boolean airJump = airTicks.getOrDefault(player.getUniqueId(), 0) > 5;
-        
-        // Solo consideramos airJump si el jugador no está cayendo (Y vel < 0)
-        // Pero para simplificar en eventos de daño/bloques, si está en el aire > 5 y no tiene suelo:
-        return internalFly || airJump;
+        int ticks = airTicks.getOrDefault(player.getUniqueId(), 0);
+        return (ticks > 14 || player.isGliding() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING));
     }
 
     private boolean checkGroundState(Player player) {
         AxisAlignedBB bb = player.getBoundingBox().clone();
-        // Usamos la lógica de colisión estricta de tu código base
-        bb.setMinY(bb.getMinY() - 0.1); 
-        bb.setMaxY(bb.getMinY() + 0.05);
+        // Usamos una comprobación de suelo más profunda para evitar desincronización
+        bb.setMinY(bb.getMinY() - 0.5); 
+        bb.setMaxY(bb.getMinY() + 0.1);
 
         for (Block block : player.getLevel().getCollisionBlocks(bb)) {
             if (!block.canPassThrough()) return true;
