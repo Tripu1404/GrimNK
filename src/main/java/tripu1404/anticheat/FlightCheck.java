@@ -5,6 +5,7 @@ import cn.nukkit.Player;
 import cn.nukkit.Server;
 import cn.nukkit.block.Block;
 import cn.nukkit.block.BlockID;
+import cn.nukkit.entity.Entity;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.block.BlockPlaceEvent;
@@ -14,6 +15,7 @@ import cn.nukkit.event.player.PlayerMoveEvent;
 import cn.nukkit.event.player.PlayerQuitEvent;
 import cn.nukkit.event.player.PlayerToggleFlightEvent;
 import cn.nukkit.event.player.PlayerToggleGlideEvent;
+import cn.nukkit.item.Item;
 import cn.nukkit.level.Location;
 import cn.nukkit.math.AxisAlignedBB;
 import cn.nukkit.math.Vector3;
@@ -34,11 +36,19 @@ public class FlightCheck implements Listener {
         lastGroundLoc.remove(uuid);
     }
 
+    // Permitir el planeo legítimo si el plugin lo autoriza
     @EventHandler
     public void onToggleGlide(PlayerToggleGlideEvent event) {
-        if (event.getPlayer().isCreative() || event.getPlayer().isSpectator()) return;
+        Player player = event.getPlayer();
+        if (player.isCreative() || player.isSpectator()) return;
+        
+        // Si tienes las Elytras equipadas, permitimos el cambio de estado
+        if (player.getInventory().getChestplate().getId() == Item.ELYTRA) {
+            return;
+        }
+        
         event.setCancelled(true);
-        processViolation(event.getPlayer());
+        processViolation(player);
     }
 
     @EventHandler
@@ -53,18 +63,22 @@ public class FlightCheck implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
 
-        if (player.isCreative() || player.isSpectator() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING)) {
+        if (player.isCreative() || player.isSpectator() || player.getAdventureSettings().get(AdventureSettings.Type.ALLOW_FLIGHT)) {
             return;
         }
 
-        // Comprobamos si está en agua, lava o escalando (Lógica de CheatPlayer.kt)
+        // --- EXCEPCIONES DE MOVIMIENTO LEGÍTIMO ---
         boolean isClimbing = isClimbing(player);
         boolean isInLiquid = player.isInsideOfWater() || isInLava(player);
+        boolean isOnSlime = isOnSlime(player);
         boolean trulyOnGround = checkGroundState(player);
-        
+        boolean isRiptiding = player.getDataFlag(Entity.DATA_FLAGS, 30); // Acción de Riptide (ID 30)
+        boolean isGliding = player.isGliding() && player.getInventory().getChestplate().getId() == Item.ELYTRA;
+
         double dY = event.getTo().getY() - event.getFrom().getY();
 
-        if (trulyOnGround || isClimbing || isInLiquid) {
+        // Si el jugador está en un estado que permite estar en el aire, reseteamos contadores
+        if (trulyOnGround || isClimbing || isInLiquid || isOnSlime || isRiptiding || isGliding) {
             airTicks.put(uuid, 0);
             lastGroundLoc.put(uuid, player.getLocation().clone());
         } else {
@@ -75,8 +89,9 @@ public class FlightCheck implements Listener {
             double heightFromGround = (ground != null) ? (event.getTo().getY() - ground.getY()) : 0;
 
             if (dY > 0) { 
-                // Aumentamos el margen a 16 ticks y 1.5 de altura para mayor compatibilidad
-                if (ticks > 16 || heightFromGround > 1.5) {
+                // Límites de altura: 1.6 para salto normal, 7.0 para impulsos (Slime)
+                double maxHeight = isOnSlime ? 7.0 : 1.6;
+                if (ticks > 16 || heightFromGround > maxHeight) {
                     event.setCancelled(true);
                     processViolation(player);
                     return;
@@ -88,16 +103,12 @@ public class FlightCheck implements Listener {
                     return;
                 }
             } else {
+                // Caída normal hasta 2.0 de velocidad
                 if (Math.abs(dY) > 2.0) {
                     event.setCancelled(true);
                     processViolation(player);
                 }
             }
-        }
-
-        if (player.getAdventureSettings().get(AdventureSettings.Type.FLYING) || player.isGliding()) {
-            event.setCancelled(true);
-            processViolation(player);
         }
     }
 
@@ -117,10 +128,13 @@ public class FlightCheck implements Listener {
     }
 
     private void processViolation(Player player) {
-        player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
-        player.getAdventureSettings().set(AdventureSettings.Type.FLYING, false);
-        player.getAdventureSettings().update();
-        player.setGliding(false);
+        // Solo revertimos settings si el jugador NO tiene Elytras puestas
+        if (player.getInventory().getChestplate().getId() != Item.ELYTRA) {
+            player.getAdventureSettings().set(AdventureSettings.Type.ALLOW_FLIGHT, false);
+            player.getAdventureSettings().set(AdventureSettings.Type.FLYING, false);
+            player.getAdventureSettings().update();
+            player.setGliding(false);
+        }
 
         Location backPos = lastGroundLoc.get(player.getUniqueId());
         if (backPos != null) {
@@ -135,14 +149,18 @@ public class FlightCheck implements Listener {
 
     private boolean isViolating(Player player) {
         if (player.isCreative() || player.isSpectator()) return false;
-        int ticks = airTicks.getOrDefault(player.getUniqueId(), 0);
-        return (ticks > 16 || player.isGliding() || player.getAdventureSettings().get(AdventureSettings.Type.FLYING));
+        
+        // Un jugador está hackeando si está en el aire sin motivo legítimo (Riptide o Elytra)
+        boolean isLegitAir = player.getDataFlag(Entity.DATA_FLAGS, 30) || 
+                            (player.isGliding() && player.getInventory().getChestplate().getId() == Item.ELYTRA);
+        
+        return !isLegitAir && airTicks.getOrDefault(player.getUniqueId(), 0) > 16;
     }
 
     private boolean checkGroundState(Player player) {
         AxisAlignedBB bb = player.getBoundingBox().clone();
-        bb.setMinY(bb.getMinY() - 0.5); 
-        bb.setMaxY(bb.getMinY() + 0.1);
+        bb.setMinY(bb.getMinY() - 0.1); 
+        bb.setMaxY(bb.getMinY() + 0.05);
         for (Block block : player.getLevel().getCollisionBlocks(bb)) {
             if (!block.canPassThrough()) return true;
         }
@@ -150,16 +168,23 @@ public class FlightCheck implements Listener {
     }
 
     private boolean isInLava(Player player) {
-        return player.getLevel().getBlock(player).getId() == BlockID.LAVA || 
-               player.getLevel().getBlock(player).getId() == BlockID.STILL_LAVA;
+        int id = player.getLevel().getBlock(player).getId();
+        return id == BlockID.LAVA || id == BlockID.STILL_LAVA;
     }
 
     private boolean isClimbing(Player player) {
-        // Verifica si el bloque actual es escalable (Escaleras, Vines, Lianas)
-        Block block = player.getLevel().getBlock(player);
-        int id = block.getId();
+        int id = player.getLevel().getBlock(player).getId();
         return id == BlockID.LADDER || id == BlockID.VINE || 
                id == BlockID.WEEPING_VINES || id == BlockID.TWISTING_VINES ||
                id == BlockID.SCAFFOLDING;
+    }
+
+    private boolean isOnSlime(Player player) {
+        AxisAlignedBB bb = player.getBoundingBox().clone();
+        bb.setMinY(bb.getMinY() - 0.7);
+        for (Block block : player.getLevel().getCollisionBlocks(bb)) {
+            if (block.getId() == BlockID.SLIME_BLOCK) return true;
+        }
+        return false;
     }
 }
